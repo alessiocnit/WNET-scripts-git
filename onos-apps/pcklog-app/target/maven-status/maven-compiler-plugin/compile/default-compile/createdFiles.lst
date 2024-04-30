@@ -1,0 +1,5 @@
+org/pcklog/app/AppComponent.class
+org/pcklog/app/AppCommand.class
+org/pcklog/app/AppComponent$ReactivePacketProcessor.class
+org/pcklog/app/AppComponent$1.class
+org/pcklog/app/AnotherCommand.class

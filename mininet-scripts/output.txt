@@ -1,0 +1,9 @@
+#!/bin/bash
+
+echo "--- Files the parent directory: "
+
+ls ../
+
+
+
+
