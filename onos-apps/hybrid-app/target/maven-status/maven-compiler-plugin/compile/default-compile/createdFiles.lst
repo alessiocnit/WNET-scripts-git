@@ -1,3 +1,8 @@
-org/hybrid/app/AppComponent$ReactivePacketProcessor.class
 org/hybrid/app/AppComponent.class
+org/hybrid/app/AppComponent$InternalHostListener.class
+org/hybrid/app/AppWebApplication.class
+org/hybrid/app/AppComponent$ReactivePacketProcessor.class
+org/hybrid/app/ApiDocRegistrator.class
 org/hybrid/app/AppComponent$1.class
+org/hybrid/app/AppWebResource.class
+org/hybrid/app/ListHostCommand.class

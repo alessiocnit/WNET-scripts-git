@@ -16,21 +16,26 @@
 package org.hybrid.app;
 
 
-import org.onlab.packet.EthType;
-import org.onlab.packet.Ethernet;
-import org.onlab.packet.VlanId;
+import org.onlab.packet.*;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
 import org.onosproject.net.*;
 import org.onosproject.net.flow.*;
+import org.onosproject.net.host.HostEvent;
+import org.onosproject.net.host.HostListener;
 import org.onosproject.net.host.HostService;
+import org.onosproject.net.intent.HostToHostIntent;
+import org.onosproject.net.intent.IntentService;
 import org.onosproject.net.packet.*;
 import org.onosproject.net.topology.TopologyService;
 import org.osgi.service.component.annotations.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Set;
+
+import static com.google.common.collect.Lists.newArrayList;
 
 /**
  * Skeletal ONOS application component.
@@ -53,7 +58,12 @@ public class AppComponent {
     protected TopologyService topologyService;
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected IntentService intentService;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected FlowRuleService flowRuleService;
+
+    private InternalHostListener hostListener = new InternalHostListener();
 
     private ApplicationId appId;
 
@@ -64,6 +74,7 @@ public class AppComponent {
         appId = coreService.registerApplication(("org.hybrid.app"));
 
         packetService.addProcessor(processor, PacketProcessor.director(2));
+        hostService.addListener(hostListener);
 
         installIpv4FlowRules();
 
@@ -75,9 +86,52 @@ public class AppComponent {
         packetService.removeProcessor(processor);
         processor = null;
 
+        hostService.removeListener(hostListener);
+        hostListener = null;
+
         log.info("[WNET 2024] app has stopped");
     }
 
+    private class InternalHostListener implements HostListener {
+        @Override
+        public void event(HostEvent event) {
+
+            if (event.type() == HostEvent.Type.HOST_ADDED) {
+                log.info("A new host has been HOST_ADDED {}", event.subject().id());
+
+                //Search for other hosts and establish host2host intents
+                establishIntents(event.subject().id());
+            }
+
+            if (event.type() == HostEvent.Type.HOST_REMOVED) {
+                log.info("An host has been REMOVED {}", event.subject().id());
+            }
+        }
+    }
+
+    protected void establishIntents(HostId hostId) {
+        List<Host> hosts = newArrayList(hostService.getHosts());
+
+        for (int i=0; i < hostService.getHostCount(); i++) {
+
+            if (!hosts.get(i).id().equals(hostId)) {
+                //Submit an intent
+                HostToHostIntent intent;
+                intent = HostToHostIntent.builder()
+                        .one(hostId)
+                        .two(hosts.get(i).id())
+                        .priority(500)
+                        .appId(appId)
+                        .build();
+
+                log.info("Intent established between {} and {}",
+                        hostId,
+                        hosts.get(i).id());
+
+                intentService.submit(intent);
+            }
+        }
+    }
 
     private class ReactivePacketProcessor implements PacketProcessor {
 
@@ -119,17 +173,28 @@ public class AppComponent {
                 }
 
                 log.info("[WNET 2024] packet received IPV4 from {}", context.inPacket().receivedFrom());
-                log.info("--- [WNET 2024] SOURCE host {}", srcHostId);
-                log.info("--- [WNET 2024] DESTINATION host {}", dstHostId);
+                log.info("--- [WNET 2024] SRC host {} switch {}", srcHostId, srcHostLocation);
+                log.info("--- [WNET 2024] DST host {} switch {}", dstHostId, dstHostLocation);
 
                 if (currentDeviceId.equals(srcHostLocation)) {
                     log.info("[WNET 2024] packet received IPV4 from {} FISRT HOP !!!", context.inPacket().receivedFrom());
 
+                    HostToHostIntent intent = HostToHostIntent.builder()
+                            .appId(appId)
+                            .one(srcHost.id())
+                            .two(dstHost.id())
+                            .build();
+
+                    intentService.submit(intent);
+
+                    return;
+
+                    /*
                     //Source and destination are connected on the same device
-                    if (srcHostLocation.equals(dstHostLocation)) {
+                    if (srcHostLocation == dstHostLocation) {
                         log.warn("[WNET 2024] hosts connected on same device {}", srcHostLocation);
 
-                        //Install a flow rule in the first switch pushing a VLAN tag
+                        //Install a flow rule in the first switch forward direction
                         TrafficSelector selector = DefaultTrafficSelector.builder()
                                 .matchInPort(srcHost.location().port())
                                 .matchEthSrc(ethPck.getSourceMAC())
@@ -151,6 +216,42 @@ public class AppComponent {
                                 .build();
 
                         flowRuleService.applyFlowRules(firstRule);
+                        log.warn("[WNET 2024] installed forward rule");
+
+                        IPv4 ipv4Packet = (IPv4) ethPck.getPayload();
+                        Ip4Prefix matchIp4SrcPrefix =
+                                Ip4Prefix.valueOf(ipv4Packet.getSourceAddress(),
+                                        Ip4Prefix.MAX_MASK_LENGTH);
+                        Ip4Prefix matchIp4DstPrefix =
+                                Ip4Prefix.valueOf(ipv4Packet.getDestinationAddress(),
+                                        Ip4Prefix.MAX_MASK_LENGTH);
+
+                        //Install a flow rule in the first switch backward direction
+                        TrafficSelector selectorBack = DefaultTrafficSelector.builder()
+                                .matchInPort(dstHost.location().port())
+                                .matchEthSrc(ethPck.getDestinationMAC())
+                                .matchEthDst(ethPck.getSourceMAC())
+                                .matchEthType(Ethernet.TYPE_IPV4)
+                                .matchIPSrc(matchIp4DstPrefix)
+                                .matchIPDst(matchIp4SrcPrefix)
+                                .build();
+
+                        TrafficTreatment treatmentBack = DefaultTrafficTreatment.builder()
+                                .setOutput(srcHost.location().port())
+                                .build();
+
+                        FlowRule backwardRule = DefaultFlowRule.builder()
+                                .withSelector(selectorBack)
+                                .withTreatment(treatmentBack)
+                                .forDevice(currentDeviceId)
+                                .fromApp(appId)
+                                .withPriority(20)
+                                .forTable(0)
+                                .withIdleTimeout(10)
+                                .build();
+
+                        flowRuleService.applyFlowRules(backwardRule);
+                        log.warn("[WNET 2024] installed backward rule");
 
                         packetOut(context, dstHost.location().port());
 
@@ -261,6 +362,8 @@ public class AppComponent {
                     packetOut(context, path.links().get(0).src().port());
 
                     return;
+
+                     */
                 }
 
                 log.error("[WNET 2024] packet received IPV4 from {} INTERMEDIATE HOP !!!", context.inPacket().receivedFrom());
