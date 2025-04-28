@@ -16,7 +16,7 @@ class SimplePktSwitch(Topo):
         super(SimplePktSwitch, self).__init__(**opts)
 
         # Adding switches
-	s0 = self.addSwitch('s0', dpid="1000000000000000", protocols='OpenFlow13', datapath='user')
+        s0 = self.addSwitch('s0', dpid="1000000000000000", protocols='OpenFlow13', datapath='user')
 
 def run():
     c = RemoteController('c', '127.0.0.1')
